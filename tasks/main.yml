@@ -1,0 +1,127 @@
+
+- name: "compute some facts"
+  set_fact:
+    buildbot_vars: >
+      {%- set buildbot_vars = buildbot_vars|default({}) -%}
+      {%- set current_master = buildbot_vars.setdefault(buildmaster_name, {}) -%}
+      {%- set slave_dict = current_master.setdefault('buildslaves', {}) -%}
+      {%- set _ = slave_dict.update(buildslaves|default({})) -%}
+
+      {%- set listen_type = hostvars[inventory_hostname][buildmaster_name ~ '_listen_type']
+        |default(buildmaster_listen_type) -%}
+
+      {%- set _ = current_master.update({
+        'listen_type': listen_type,
+        'add_trailing_slash_basepath': True,
+        'path': '/',
+        'template': buildmaster_template if buildmaster_template else "",
+        'hostname': inventory_hostname,
+        'slave_api_port': buildbot_slave_api_port,
+        'buildslaves': slave_dict,
+        }) -%}
+      {%- if listen_type == 'unix' -%}
+        {%- set _ = current_master.update(
+          {'socket': hostvars[inventory_hostname][buildmaster_name ~ '_socket']
+                    |default('/tmp/' ~ buildmaster_name ~ '.sock')
+          }) -%}
+      {%- else -%}
+        {%- set _ = current_master.update(
+          {'listen_ip': hostvars[inventory_hostname][buildmaster_name ~ '_listen_ip']
+                            |default(buildmaster_listen_ip),
+           'listen_port': hostvars[inventory_hostname][buildmaster_name ~ '_listen_port']
+                            |default(buildmaster_listen_port)
+          }) -%}
+      {%- endif -%}
+      {{buildbot_vars}}
+
+- debug: var=buildbot_vars
+  when: debug|bool()
+
+- name: "install python pip/virtualenv"
+  pacman: name={{item}} state=present
+  with_items:
+    - python2-pip
+    - python2-virtualenv
+
+- name: "create buildbot user"
+  copy:
+    content: 'u buildbot - "Buildbot user" {{buildmaster_base_path}}'
+    dest: /usr/lib/sysusers.d/buildbot.conf
+  register: buildbot_user_create
+
+- name: "call systemd for creating user"
+  command: systemd-sysusers buildbot.conf
+  when: buildbot_user_create|changed
+
+- name: "create buildmaster directory"
+  file:
+    name: '{{ buildmaster_base_path }}'
+    owner: 'buildbot'
+    state: 'directory'
+
+- name: "install virtual env"
+  pip:
+    name: 'buildbot'
+    state: 'present'
+    virtualenv: '{{ buildmaster_base_path }}/{{buildmaster_name}}'
+    virtualenv_command: virtualenv2
+  become_user: buildbot
+  become: yes
+
+- name: "create buildbot_master"
+  command: ./bin/buildbot create-master {{buildmaster_dir}}
+  args:
+    chdir: '{{ buildmaster_base_path }}/{{buildmaster_name}}'
+    creates: >
+      {{ buildmaster_base_path }}/{{ buildmaster_name }}/
+        {{- buildmaster_dir }}/buildbot.tac
+  become_user: buildbot
+  become: yes
+
+- name: "create buildbot configuration file"
+  template:
+    src: >
+      {{ buildmaster_template if buildmaster_template
+        else "master.cfg.j2"}}
+    dest: >
+      {{ buildmaster_base_path }}/{{ buildmaster_name }}/
+        {{- buildmaster_dir }}/master.cfg
+    backup: True
+  become_user: buildbot
+  become: yes
+  notify:
+    - restart buildbot
+
+- name: "deploy config"
+  template:
+    src: '{{ buildmaster_config_file }}'
+    dest: >
+      {{ buildmaster_base_path }}/{{ buildmaster_name }}/
+        {{- buildmaster_dir }}/config.py
+    backup: True
+  when: not buildmaster_template|bool
+  become_user: buildbot
+  become: yes
+  notify:
+    - restart buildbot
+
+- name: "install passlib"
+  pacman: name=python2-passlib state=present
+
+- name: "make htpasswd"
+  htpasswd:
+    path: >
+      {{ buildmaster_base_path }}/{{ buildmaster_name }}/
+        {{- buildmaster_dir }}/htpasswd
+    name: '{{ buildmaster_web_admin|default("admin") }}'
+    password: '{{ buildmaster_web_password|default("P@ssw0rd") }}'
+  become_user: buildbot
+  become: yes
+
+- name: "install systemd init script"
+  template:
+    src: buildmaster.service.j2
+    dest: /etc/systemd/system/buildmaster@.service
+
+- name: "start and enable systemd"
+  service: name=buildmaster@{{ buildmaster_name }} state=started enabled=True

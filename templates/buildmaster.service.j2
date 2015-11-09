@@ -1,0 +1,13 @@
+[Unit]
+Description=Buildbot systemd unit for %i
+After=network.target
+
+[Service]
+Type=simple
+User=buildbot
+ExecStart=/bin/bash -c '{{ buildmaster_base_path }}/%i/bin/buildbot start --nodaemon {{ buildmaster_base_path }}/%i'
+ExecReload=/bin/bash -c '{{ buildmaster_base_path }}/%i/bin/buildbot reconfig {{ buildmaster_base_path }}/%i'
+ExecStop=/bin/bash -c '{{ buildmaster_base_path }}/%i/bin/buildbot stop {{ buildmaster_base_path }}/%i'
+
+[Install]
+WantedBy=multi-user.target

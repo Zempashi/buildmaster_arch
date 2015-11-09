@@ -1,0 +1,3 @@
+---
+buildmaster_base_path: /srv/buildmaster
+buildmaster_dir: '.'

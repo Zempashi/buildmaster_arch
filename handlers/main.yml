@@ -1,0 +1,5 @@
+- name: "reload buildbot"
+  service: name=buildmaster@{{ buildmaster_name }} state=reloaded
+
+- name: "restart buildbot"
+  service: name=buildmaster@{{ buildmaster_name }} state=restarted
